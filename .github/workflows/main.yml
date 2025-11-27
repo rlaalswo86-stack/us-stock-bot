@@ -1,0 +1,30 @@
+name: US Stock Analysis Bot
+
+on:
+  schedule:
+    # 한국 시간 아침 7시 (UTC 22:00) 월~금 실행
+    - cron: '0 22 * * 1-5'
+  workflow_dispatch: # 수동 실행 버튼 활성화
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 코드 체크아웃
+      uses: actions/checkout@v3
+
+    - name: 파이썬 3.9 설정
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 라이브러리 설치
+      run: |
+        pip install -r requirements.txt
+
+    - name: 주식 분석 실행
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        CHAT_ID: ${{ secrets.CHAT_ID }}
+      run: python main.py
