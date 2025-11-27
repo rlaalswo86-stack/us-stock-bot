@@ -7,8 +7,16 @@ import time
 # ---------------------------------------------------------
 # [Setup] 환경 변수 (Secrets)
 # ---------------------------------------------------------
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-CHAT_ID = os.environ.get('CHAT_ID')
+# Colab Secret 기능을 사용하여 TOKEN과 CHAT_ID를 설정해주세요.
+# 좌측 패널의 '🔑' 아이콘을 클릭하여 'TELEGRAM_TOKEN'과 'CHAT_ID'를 추가합니다.
+try:
+    from google.colab import userdata
+    TELEGRAM_TOKEN = userdata.get('TELEGRAM_TOKEN')
+    CHAT_ID = userdata.get('CHAT_ID')
+except ImportError:
+    # Colab 환경이 아닌 경우, 일반 환경 변수에서 로드 시도
+    TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+    CHAT_ID = os.environ.get('CHAT_ID')
 
 # ---------------------------------------------------------
 # [Function 1] S&P 500 종목 리스트 가져오기 (Data Acquisition)
@@ -16,11 +24,13 @@ CHAT_ID = os.environ.get('CHAT_ID')
 def get_sp500_tickers():
     """위키피디아에서 S&P 500 종목 리스트를 크롤링합니다."""
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
         # pandas의 read_html 기능으로 웹페이지의 표를 통째로 가져옵니다.
-        tables = pd.read_html(url)
+        # requests_args를 통해 User-Agent 헤더를 추가합니다.
+        tables = pd.read_html(url, storage_options=headers)
         df = tables[0] # 첫 번째 표가 종목 리스트입니다.
-        
+
         # 기호 수정: 위키는 'BRK.B'로 쓰지만 야후는 'BRK-B'로 씁니다.
         tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
         print(f"S&P 500 리스트 확보 완료: 총 {len(tickers)}개 종목")
@@ -41,7 +51,11 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     # 메시지가 너무 길면 잘릴 수 있어서 나눠서 보낼 수도 있지만, 여기선 1차 필터링만 합니다.
     data = {'chat_id': CHAT_ID, 'text': message}
-    requests.post(url, data=data)
+    try:
+        response = requests.post(url, data=data)
+        response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+    except requests.exceptions.RequestException as e:
+        print(f"텔레그램 메시지 전송 실패: {e}")
 
 # ---------------------------------------------------------
 # [Function 3] 지표 계산 (DSP Unit)
@@ -60,13 +74,13 @@ def calculate_rsi(data, window=14):
 def run_analysis():
     # 1. 대상 종목 가져오기
     tickers = get_sp500_tickers()
-    
+
     print(f"시스템 가동... 총 {len(tickers)}개 종목 전수 검사 시작")
     picked_stocks = []
-    
+
     # 카운터 (진행 상황 표시용)
     count = 0
-    
+
     for ticker in tickers:
         count += 1
         # 로그가 너무 많이 찍히면 지저분하니 50개마다 생존신호 출력
@@ -76,7 +90,7 @@ def run_analysis():
         try:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="6mo")
-            
+
             if hist.empty: continue
 
             # --- [지표 계산] ---
@@ -84,9 +98,9 @@ def run_analysis():
             ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
             hist['RSI'] = calculate_rsi(hist)
             current_rsi = hist['RSI'].iloc[-1]
-            
-            # API 호출 최소화를 위해 info는 꼭 필요할 때만 부르거나, 
-            # 대량 처리시에는 속도를 위해 생략하기도 합니다. 
+
+            # API 호출 최소화를 위해 info는 꼭 필요할 때만 부르거나,
+            # 대량 처리시에는 속도를 위해 생략하기도 합니다.
             # 여기서는 정밀 분석을 위해 호출하되, 에러나면 넘어갑니다.
             try:
                 info = stock.info
@@ -95,15 +109,15 @@ def run_analysis():
                 pbr = info.get('priceToBook', 999)
             except:
                 per, roe, pbr = 999, 0, 999 # 기본값 설정
-            
+
             # --- [필터링 조건 (Threshold)] ---
             # 조건이 너무 약하면 알림 폭탄을 맞습니다. 조건을 조금 빡빡하게 조이겠습니다.
             cond_per = (per < 30) and (per > 0) # PER 30이하 (적자 기업 제외)
             cond_roe = roe > 0.15               # ROE 15% 이상 (우량주)
             cond_rsi = current_rsi < 35         # RSI 35 미만 (과매도 강력 신호)
-            
+
             # (옵션) 20일 이평선보다는 아래에 있어야 '저점 매수'겠죠?
-            # cond_ma = current_price < ma_20 
+            # cond_ma = current_price < ma_20
 
             if cond_per and cond_roe and cond_rsi:
                 status_msg = (
@@ -117,12 +131,12 @@ def run_analysis():
         except Exception as e:
             # 개별 종목 에러는 무시하고 계속 진행 (Watchdog)
             continue
-            
+
     # 결과 보고
     if picked_stocks:
         header = f"📊 [S&P 500 전수 조사 결과]\n총 {len(picked_stocks)}개 포착됨\n\n"
         full_msg = header + "\n\n".join(picked_stocks)
-        
+
         # 텔레그램 메시지 길이 제한(4096자) 방지: 너무 길면 잘라서 보냄
         if len(full_msg) > 4000:
             send_telegram_message(header + "종목이 너무 많아 상위 10개만 보냅니다.")
