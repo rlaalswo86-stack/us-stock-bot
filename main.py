@@ -27,12 +27,19 @@ def get_sp500_tickers():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
         # pandas의 read_html 기능으로 웹페이지의 표를 통째로 가져옵니다.
-        # requests_args를 통해 User-Agent 헤더를 추가합니다.
         tables = pd.read_html(url, storage_options=headers)
-        df = tables[0] # 첫 번째 표가 종목 리스트입니다.
+        
+        df_sp500 = None
+        for table in tables:
+            if 'Symbol' in table.columns:
+                df_sp500 = table
+                break
+        
+        if df_sp500 is None:
+            raise ValueError("Could not find S&P 500 table with 'Symbol' column.")
 
         # 기호 수정: 위키는 'BRK.B'로 쓰지만 야후는 'BRK-B'로 씁니다.
-        tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
+        tickers = df_sp500['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
         print(f"S&P 500 리스트 확보 완료: 총 {len(tickers)}개 종목")
         return tickers
     except Exception as e:
